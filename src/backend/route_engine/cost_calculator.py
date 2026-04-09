@@ -1,262 +1,190 @@
-"""Cost Calculator: Total cost = base_freight + origin_charges + destination_charges + surcharge + dem_det + inland + handling + special_equipment + buffer."""
-
+"""Cost Calculator: total_cost_aed = sum of all cost components."""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Optional
+from decimal import Decimal
 
-from .types import (
-    RouteOption,
-    CostBreakdown,
-    ShipmentRequest,
-    RouteLeg,
-)
+from .types import CostBreakdown, RouteOption, ShipmentRequest
 
 
-# Default rates per container type (AED)
-DEFAULT_RATES = {
-    "20DV": {
-        "base_freight": 3500.00,
-        "origin_charges": 450.00,
-        "destination_charges": 550.00,
-        "surcharge": 280.00,
-        "handling": 180.00,
-        "special_equipment": 0.00,
-        "buffer": 320.00,
+# Simplified rate table (MVP data - would come from rate_table.yaml in production)
+_BASE_FREIGHT_RATES: dict[str, dict[str, Decimal]] = {
+    "SEA_DIRECT": {
+        "20GP": Decimal("2800.00"),
+        "40GP": Decimal("5200.00"),
+        "40HC": Decimal("5600.00"),
+        "LCL": Decimal("180.00"),  # per CBM
     },
-    "40DV": {
-        "base_freight": 5800.00,
-        "origin_charges": 650.00,
-        "destination_charges": 780.00,
-        "surcharge": 420.00,
-        "handling": 250.00,
-        "special_equipment": 0.00,
-        "buffer": 480.00,
+    "SEA_TRANSSHIP": {
+        "20GP": Decimal("2400.00"),
+        "40GP": Decimal("4500.00"),
+        "40HC": Decimal("4900.00"),
+        "LCL": Decimal("150.00"),
     },
-    "40HC": {
-        "base_freight": 6200.00,
-        "origin_charges": 680.00,
-        "destination_charges": 820.00,
-        "surcharge": 450.00,
-        "handling": 280.00,
-        "special_equipment": 0.00,
-        "buffer": 520.00,
-    },
-    "REF": {
-        "base_freight": 7000.00,
-        "origin_charges": 750.00,
-        "destination_charges": 900.00,
-        "surcharge": 550.00,
-        "handling": 320.00,
-        "special_equipment": 0.00,
-        "buffer": 600.00,
+    "SEA_LAND": {
+        "20GP": Decimal("2600.00"),
+        "40GP": Decimal("4800.00"),
+        "40HC": Decimal("5200.00"),
+        "LCL": Decimal("160.00"),
     },
 }
 
-# Inland transport rates per destination (AED)
-INLAND_RATES = {
-    "DUBAI": 450.00,
-    "ABU DHABI": 680.00,
-    "SHARJAH": 380.00,
-    "AJMAN": 350.00,
-    "RIYADH": 1200.00,
-    "JEDDAH": 980.00,
-    "DAMMAM": 850.00,
-    "DOHA": 920.00,
-    "KUWAIT CITY": 1100.00,
-    "MANAMA": 780.00,
+_ORIGIN_CHARGES: dict[str, Decimal] = {
+    "AE": Decimal("320.00"),
+    "SA": Decimal("380.00"),
+    "QA": Decimal("350.00"),
+    "BH": Decimal("340.00"),
+    "OM": Decimal("360.00"),
+    "DEFAULT": Decimal("400.00"),
 }
 
-# Surcharge rates by route (AED)
-SURCHARGE_RATES = {
-    "SEA_DIRECT": 280.00,
-    "SEA_TRANSSHIP": 450.00,
-    "SEA_LAND": 320.00,
+_DEST_CHARGES: dict[str, Decimal] = {
+    "AE": Decimal("280.00"),
+    "SA": Decimal("320.00"),
+    "QA": Decimal("300.00"),
+    "BH": Decimal("290.00"),
+    "OM": Decimal("310.00"),
+    "DEFAULT": Decimal("350.00"),
 }
 
-# DEM/DET rates per day (AED)
-DEM_DET_RATE = 180.00
-DEM_DET_FREE_DAYS = 5
-
-# Special equipment surcharges (AED)
-SPECIAL_EQUIPMENT_RATES = {
-    "OOG": 850.00,
-    "HEAVY_LIFT": 1200.00,
-    "REF": 650.00,
+_SURCHARGE_RATES: dict[str, Decimal] = {
+    "BAF": Decimal("180.00"),
+    "CAF": Decimal("60.00"),
+    "PSS": Decimal("120.00"),
+    "WRS": Decimal("40.00"),
 }
+
+_DEM_DET_DAYS: dict[str, Decimal] = {
+    "free_time_days": Decimal("5.00"),
+    "daily_rate_20gp": Decimal("85.00"),
+    "daily_rate_40gp": Decimal("150.00"),
+    "daily_rate_40hc": Decimal("160.00"),
+}
+
+_INLAND_RATES: dict[str, Decimal] = {
+    "per_100kg": Decimal("1.20"),
+    "minimum": Decimal("180.00"),
+}
+
+_HANDLING_RATES: dict[str, Decimal] = {
+    "stuffing_20gp": Decimal("220.00"),
+    "stuffing_40gp": Decimal("380.00"),
+    "lift_on_off": Decimal("95.00"),
+}
+
+_SPECIAL_EQUIPMENT_RATES: dict[str, Decimal] = {
+    "OOG": Decimal("450.00"),
+    "HEAVY_LIFT": Decimal("680.00"),
+    "REEFER": Decimal("380.00"),
+}
+
+_BUFFER_PCT = Decimal("0.05")  # 5% buffer on total
+
+
+def _get_currency_region(code: str) -> str:
+    """Extract region from port/site code."""
+    return code[:2].upper() if len(code) >= 2 else "DEFAULT"
+
+
+def _compute_dem_det(
+    container_type: str,
+    transit_days: Decimal,
+) -> tuple[Decimal, bool]:
+    """
+    Compute DEM/DET exposure cost.
+
+    Returns (dem_det_aed, is_estimated).
+    If actual free time exceeded, estimate exposure.
+    """
+    free_days = _DEM_DET_DAYS["free_time_days"]
+    if transit_days <= free_days:
+        return Decimal("0.00"), False
+
+    excess_days = transit_days - free_days
+    rate_key = f"daily_rate_{container_type.lower()}"
+    daily_rate = _DEM_DET_DAYS.get(rate_key, _DEM_DET_DAYS["daily_rate_20gp"])
+    dem_det = Decimal(str(excess_days)) * daily_rate
+    return round(dem_det, 2), True
 
 
 def calculate_route_cost(
     route: RouteOption,
-    request: ShipmentRequest,
+    shipment: ShipmentRequest,
+    transit_days: Decimal,
 ) -> CostBreakdown:
     """
     Calculate total cost for a route option.
 
-    Total = base_freight + origin_charges + destination_charges + surcharge
-            + dem_det_estimated + inland + handling + special_equipment + buffer
+    Formula (FR-016):
+    total_cost_aed = base_freight + origin_charges + destination_charges
+                  + surcharge + dem_det_estimated + inland + handling
+                  + special_equipment + buffer_cost
+
+    All values in AED, rounded to 2 decimal places.
+    DEM/DET stored as dem_det_estimated_aed when exposure-based.
     """
-    container_type = request.container_type.upper()
-    rates = _get_rates_for_container(container_type)
+    ct = shipment.container_type.upper()
+    route_key = route.route_code.value
 
     # Base freight
-    base_freight = rates["base_freight"] * request.quantity
+    rate_table = _BASE_FREIGHT_RATES.get(route_key, _BASE_FREIGHT_RATES["SEA_DIRECT"])
+    base_freight = rate_table.get(ct, rate_table.get("20GP", Decimal("2500.00")))
+    # Scale by quantity
+    base_freight = base_freight * max(1, shipment.quantity)
 
     # Origin charges
-    origin_charges = rates["origin_charges"] * request.quantity
+    origin_region = _get_currency_region(shipment.pol_code)
+    origin_charges = _ORIGIN_CHARGES.get(origin_region, _ORIGIN_CHARGES["DEFAULT"])
+    origin_charges = origin_charges * max(1, shipment.quantity)
 
     # Destination charges
-    destination_charges = rates["destination_charges"] * request.quantity
+    dest_region = _get_currency_region(shipment.pod_code)
+    dest_charges = _DEST_CHARGES.get(dest_region, _DEST_CHARGES["DEFAULT"])
+    dest_charges = dest_charges * max(1, shipment.quantity)
 
-    # Surcharge (varies by route type)
-    surcharge = _get_surcharge(route.route_code.value) * request.quantity
+    # Surcharges (BAF + CAF + PSS + WRS per container)
+    surcharge = sum(_SURCHARGE_RATES.values()) * max(1, shipment.quantity)
 
-    # DEM/DET estimated (exposure-based estimation)
-    dem_det_estimated = _calculate_dem_det_estimated(route, request)
+    # DEM/DET
+    dem_det, _ = _compute_dem_det(ct, transit_days)
+    dem_det = dem_det * max(1, shipment.quantity)
 
-    # Inland cost (for SEA_LAND routes)
-    inland = _calculate_inland_cost(route, request)
+    # Inland cost (SEA_LAND only)
+    inland = Decimal("0.00")
+    if route.route_code.value == "SEA_LAND":
+        weight_charge = Decimal(str(shipment.gross_weight_kg)) / Decimal("100.0")
+        inland = max(
+            _INLAND_RATES["minimum"],
+            weight_charge * _INLAND_RATES["per_100kg"] * max(1, shipment.quantity),
+        )
 
     # Handling
-    handling = rates["handling"] * request.quantity
+    if ct in ("20GP", "20CONTAINER"):
+        handling = _HANDLING_RATES["stuffing_20gp"] * max(1, shipment.quantity)
+    else:
+        handling = _HANDLING_RATES["stuffing_40gp"] * max(1, shipment.quantity)
+    handling += _HANDLING_RATES["lift_on_off"] * max(1, shipment.quantity)
 
     # Special equipment
-    special_equipment = _get_special_equipment_cost(request, route)
+    special = Decimal("0.00")
+    if shipment.cargo_type.value == "OOG":
+        special = _SPECIAL_EQUIPMENT_RATES["OOG"] * max(1, shipment.quantity)
+    elif shipment.cargo_type.value == "HEAVY_LIFT":
+        special = _SPECIAL_EQUIPMENT_RATES["HEAVY_LIFT"] * max(1, shipment.quantity)
 
-    # Buffer
-    buffer = rates["buffer"] * request.quantity
-
-    # Calculate total
-    total_cost = (
-        round(base_freight, 2)
-        + round(origin_charges, 2)
-        + round(destination_charges, 2)
-        + round(surcharge, 2)
-        + round(dem_det_estimated, 2)
-        + round(inland, 2)
-        + round(handling, 2)
-        + round(special_equipment, 2)
-        + round(buffer, 2)
+    # Buffer (5% of subtotal)
+    subtotal = (
+        base_freight + origin_charges + dest_charges + surcharge + dem_det + inland + handling + special
     )
+    buffer_cost = (subtotal * _BUFFER_PCT).quantize(Decimal("0.01"))
 
-    components = {
-        "base_freight_aed": round(base_freight, 2),
-        "origin_charges_aed": round(origin_charges, 2),
-        "destination_charges_aed": round(destination_charges, 2),
-        "surcharge_aed": round(surcharge, 2),
-        "dem_det_estimated_aed": round(dem_det_estimated, 2),
-        "inland_aed": round(inland, 2),
-        "handling_aed": round(handling, 2),
-        "special_equipment_aed": round(special_equipment, 2),
-        "buffer_cost_aed": round(buffer, 2),
-    }
-
-    return CostBreakdown(
-        base_freight_aed=round(base_freight, 2),
-        origin_charges_aed=round(origin_charges, 2),
-        destination_charges_aed=round(destination_charges, 2),
-        surcharge_aed=round(surcharge, 2),
-        dem_det_estimated_aed=round(dem_det_estimated, 2),
-        inland_aed=round(inland, 2),
-        handling_aed=round(handling, 2),
-        special_equipment_aed=round(special_equipment, 2),
-        buffer_cost_aed=round(buffer, 2),
-        total_cost_aed=round(total_cost, 2),
-        components=components,
+    return CostBreakdown.compute(
+        base_freight_aed=base_freight,
+        origin_charges_aed=origin_charges,
+        destination_charges_aed=dest_charges,
+        surcharge_aed=surcharge,
+        dem_det_estimated_aed=dem_det,
+        inland_aed=inland,
+        handling_aed=handling,
+        special_equipment_aed=special,
+        buffer_cost_aed=buffer_cost,
     )
-
-
-def _get_rates_for_container(container_type: str) -> dict:
-    """Get rate table for container type."""
-    return DEFAULT_RATES.get(container_type, DEFAULT_RATES["20DV"])
-
-
-def _get_surcharge(route_code: str) -> float:
-    """Get surcharge for route type."""
-    return SURCHARGE_RATES.get(route_code, 280.00)
-
-
-def _calculate_dem_det_estimated(route: RouteOption, request: ShipmentRequest) -> float:
-    """
-    Calculate DEM/DET exposure estimate.
-
-    For MVP, we estimate based on typical free time and potential delays.
-    In production, this would use actual DEM/DET contract rates.
-    """
-    # Estimate potential demurrage/detention exposure
-    # Assume some chance of delay based on route complexity
-    route_code = route.route_code.value
-
-    if route_code == "SEA_DIRECT":
-        # Lower risk for direct routes
-        exposure_days = 2.0
-    elif route_code == "SEA_TRANSSHIP":
-        # Higher risk due to connection uncertainty
-        exposure_days = 4.0
-    else:  # SEA_LAND
-        # Medium risk
-        exposure_days = 3.0
-
-    # Only charge if container type supports DEM/DET
-    if request.container_type.upper() in ["20DV", "40DV", "40HC"]:
-        return DEM_DET_RATE * exposure_days
-
-    return 0.00
-
-
-def _calculate_inland_cost(route: RouteOption, request: ShipmentRequest) -> float:
-    """Calculate inland transport cost for SEA_LAND routes."""
-    if route.route_code.value != "SEA_LAND":
-        return 0.00
-
-    # Get the inland leg (second leg)
-    inland_leg = None
-    for leg in route.legs:
-        if leg.mode == "LAND":
-            inland_leg = leg
-            break
-
-    if inland_leg:
-        dest = inland_leg.destination_node.upper()
-        return INLAND_RATES.get(dest, 500.00) * request.quantity
-
-    return 0.00
-
-
-def _get_special_equipment_cost(request: ShipmentRequest, route: RouteOption) -> float:
-    """Calculate special equipment surcharge."""
-    cargo_type = request.cargo_type.value
-
-    if cargo_type == "OOG":
-        return SPECIAL_EQUIPMENT_RATES["OOG"] * request.quantity
-    elif cargo_type == "HEAVY_LIFT":
-        return SPECIAL_EQUIPMENT_RATES["HEAVY_LIFT"] * request.quantity
-
-    # Check if route requires special equipment
-    if route.legs:
-        for leg in route.legs:
-            if leg.restrictions:
-                if "heavy_lift_allowed" in leg.restrictions:
-                    return SPECIAL_EQUIPMENT_RATES["HEAVY_LIFT"] * request.quantity
-
-    return 0.00
-
-
-def calculate_buffer_cost(
-    route: RouteOption,
-    request: ShipmentRequest,
-    risk_level: str,
-) -> float:
-    """
-    Calculate buffer cost based on risk level.
-
-    Higher risk routes get larger buffers.
-    """
-    base_buffer = _get_rates_for_container(request.container_type.upper()).get("buffer", 320.00)
-
-    if risk_level == "HIGH":
-        return base_buffer * 1.5 * request.quantity
-    elif risk_level == "MEDIUM":
-        return base_buffer * 1.2 * request.quantity
-    else:
-        return base_buffer * request.quantity

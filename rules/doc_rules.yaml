@@ -1,37 +1,44 @@
+# doc_rules.yaml
+# Version: v2026.04
+# Scope: Required documents per route type
+---
 version: v2026.04
 
-# Required documents per route type
 route_docs:
   SEA_DIRECT:
-    - CI    # Commercial Invoice
-    - PL    # Packing List
-    - BL    # Bill of Lading
-    - COO   # Certificate of Origin
+    required:
+      - CI   # Commercial Invoice
+      - PL   # Packing List
+      - BL   # Bill of Lading
+      - COO  # Certificate of Origin
+    optional: []
 
   SEA_TRANSSHIP:
-    - CI
-    - PL
-    - BL
-    - COO
-    - HUB_DOC  # Hub/transshipment documentation
+    required:
+      - CI
+      - PL
+      - BL
+      - COO
+      - HUB_DOC  # Hub/transshipment documentation
+    optional: []
 
   SEA_LAND:
-    - CI
-    - PL
-    - BL
-    - COO
-    - INLAND_DO  # Inland Delivery Order
+    required:
+      - CI
+      - PL
+      - BL
+      - COO
+      - INLAND_DO  # Inland delivery order
+    optional: []
 
-# Optional documents (not blocking)
-optional_docs:
-  - Packing_List_Amendment
-  - Insurance_Certificate
-  - Phytosanitary_Certificate
-  - Fumigation_Certificate
-
-# Customs documents for review
+# Customs documents
 customs_docs:
-  required_for_high_risk:
-    - customs_declaration
-    - duty_evidence
-  reason_code: CUSTOMS_REVIEW_REQUIRED
+  HS_CODE:
+    description: Harmonized System code (6-12 digits)
+    required: true
+  COO:
+    description: Certificate of Origin
+    required: true
+  CI:
+    description: Commercial Invoice
+    required: true

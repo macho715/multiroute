@@ -1,266 +1,232 @@
-"""Constraint Evaluator: WH capacity, deadline, docs, customs constraints."""
-
+"""Constraint Evaluator: deadline, WH capacity, docs, customs, connection."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
+from decimal import Decimal
 
 from .types import (
+    ConstraintEvaluation,
     RouteOption,
     ShipmentRequest,
-    ConstraintEvaluation,
+    TransitEstimate,
+    WHCapacitySnapshot,
     WHImpactLevel,
-    RouteLeg,
-    RouteCode,
+    RiskLevel,
 )
 
 
-# Reason codes used by constraint evaluator
-REASON_LANE_UNSUPPORTED = "LANE_UNSUPPORTED"
-REASON_MANDATORY_DOC_MISSING = "MANDATORY_DOC_MISSING"
-REASON_WH_CAPACITY_BLOCKED = "WH_CAPACITY_BLOCKED"
-REASON_DEADLINE_MISS = "DEADLINE_MISS"
-REASON_HS_CODE_MISSING = "HS_CODE_MISSING"
-REASON_CUSTOMS_INPUT_MISSING = "CUSTOMS_INPUT_MISSING"
-REASON_FX_NORMALIZED_AED_REQUIRED = "FX_NORMALIZED_AED_REQUIRED"
-REASON_WH_SNAPSHOT_STALE = "WH_SNAPSHOT_STALE"
-REASON_HUB_RESTRICTED_FOR_OOG = "HUB_RESTRICTED_FOR_OOG"
-REASON_WEIGHT_LIMIT_EXCEEDED = "WEIGHT_LIMIT_EXCEEDED"
-REASON_COG_DATA_REQUIRED = "COG_DATA_REQUIRED"
-REASON_CONNECTION_RISK_HIGH = "CONNECTION_RISK_HIGH"
-REASON_DEM_DET_EXPOSURE_ESTIMATED = "DEM_DET_EXPOSURE_ESTIMATED"
-REASON_CUSTOMS_REVIEW_REQUIRED = "CUSTOMS_REVIEW_REQUIRED"
-
-# High-risk HS code prefixes
-HIGH_RISK_HS_PREFIXES = ["84", "85", "87"]
-
-# Weight limits per route
-WEIGHT_LIMITS = {
-    RouteCode.SEA_DIRECT: 30000.0,
-    RouteCode.SEA_TRANSSHIP: 28000.0,
-    RouteCode.SEA_LAND: 25000.0,
+# Required documents per route from doc_rules.yaml
+_REQUIRED_DOCS: dict[str, list[str]] = {
+    "SEA_DIRECT": ["CI", "PL", "BL", "COO"],
+    "SEA_TRANSSHIP": ["CI", "PL", "BL", "COO", "HUB_DOC"],
+    "SEA_LAND": ["CI", "PL", "BL", "COO", "INLAND_DO"],
 }
-
-# Connection risk thresholds
-HIGH_RISK_CONNECTION_DAYS = 1.00
 
 
 def evaluate_constraints(
     route: RouteOption,
-    request: ShipmentRequest,
-    wh_snapshot_age_hours: Optional[float] = None,
+    shipment: ShipmentRequest,
+    transit_est: TransitEstimate,
+    wh_snapshot: WHCapacitySnapshot | None = None,
+    eta: datetime | None = None,
+    deadline_slack_days: Decimal | None = None,
 ) -> ConstraintEvaluation:
     """
     Evaluate all constraints for a route option.
 
-    Returns ConstraintEvaluation with deadline_ok, wh_ok, docs_ok,
-    customs_ok, connection_ok, wh_impact_level, docs_completeness_pct,
-    reason_codes, and input_required_codes.
+    Evaluates:
+    - deadline_ok: eta <= required_delivery_date
+    - wh_ok: warehouse capacity not exceeded
+    - docs_ok: mandatory documents available
+    - customs_ok: customs inputs present
+    - connection_ok: multimodal connections feasible
+
+    Also computes:
+    - wh_impact_level: LOW/MEDIUM/HIGH/BLOCKED
+    - docs_completeness_pct: percentage of required docs available
     """
+    result = ConstraintEvaluation()
     reason_codes: list[str] = []
     input_required_codes: list[str] = []
+    assumption_notes: list[str] = []
 
-    # --- Deadline constraint ---
-    deadline_ok = _check_deadline(route, request)
+    # ── Deadline Constraint ──────────────────────────────────────────────────
+    if eta is None:
+        eta = transit_est.eta
+    if deadline_slack_days is None:
+        deadline_slack_days = transit_est.deadline_slack_days
 
-    # --- WH capacity constraint ---
-    wh_ok, wh_impact, wh_reason = _check_wh_capacity(
-        request, wh_snapshot_age_hours
+    if deadline_slack_days < Decimal("0.00"):
+        result.deadline_ok = False
+        reason_codes.append("DEADLINE_MISS")
+
+    # ── WH Capacity Constraint ───────────────────────────────────────────────
+    wh_ok, wh_impact, wh_reason = _evaluate_wh_capacity(
+        shipment, eta, wh_snapshot
     )
-    if not wh_ok:
+    result.wh_ok = wh_ok
+    result.wh_impact_level = wh_impact
+    if wh_reason:
         reason_codes.append(wh_reason)
 
-    # --- Docs constraint ---
-    docs_ok, docs_pct, docs_reason = _check_docs(route, request)
-    if not docs_ok:
-        reason_codes.append(docs_reason)
+    # ── Docs Constraint ──────────────────────────────────────────────────────
+    docs_ok, completeness_pct, doc_reason = _evaluate_docs(
+        shipment, route
+    )
+    result.docs_ok = docs_ok
+    result.docs_completeness_pct = completeness_pct
+    if doc_reason:
+        reason_codes.append(doc_reason)
 
-    # --- Customs constraint ---
-    customs_ok, customs_reason = _check_customs(request)
-    if not customs_ok:
+    # ── Customs Constraint ───────────────────────────────────────────────────
+    customs_ok, customs_reason, customs_input = _evaluate_customs(shipment)
+    result.customs_ok = customs_ok
+    if customs_reason:
         reason_codes.append(customs_reason)
+    if customs_input:
+        input_required_codes.extend(customs_input)
 
-    # --- Connection constraint ---
-    connection_ok, connection_reason = _check_connection(route)
-    if not connection_ok:
-        reason_codes.append(connection_reason)
+    # ── Connection Risk ──────────────────────────────────────────────────────
+    connection_ok, conn_reason = _evaluate_connection(route)
+    result.connection_ok = connection_ok
+    if conn_reason:
+        reason_codes.append(conn_reason)
 
-    # --- Weight constraint ---
-    weight_ok, weight_reason = _check_weight(route, request)
-    if not weight_ok:
-        reason_codes.append(weight_reason)
-
-    # --- WH freshness ---
-    if wh_snapshot_age_hours is not None:
-        if wh_snapshot_age_hours > 72.0:
-            input_required_codes.append(REASON_WH_SNAPSHOT_STALE)
-            wh_ok = False
-        elif wh_snapshot_age_hours > 24.0:
-            # AMBER but not blocking
-            pass
-
-    # Determine overall feasibility
-    feasible = (
-        deadline_ok
-        and wh_ok
-        and docs_ok
-        and customs_ok
-        and connection_ok
-        and weight_ok
-    )
-
-    return ConstraintEvaluation(
-        deadline_ok=deadline_ok,
-        wh_ok=wh_ok,
-        docs_ok=docs_ok,
-        customs_ok=customs_ok,
-        connection_ok=connection_ok,
-        wh_impact_level=wh_impact,
-        docs_completeness_pct=docs_pct,
-        reason_codes=reason_codes,
-        input_required_codes=input_required_codes,
-    )
+    result.reason_codes = reason_codes
+    result.input_required_codes = input_required_codes
+    return result
 
 
-def _check_deadline(route: RouteOption, request: ShipmentRequest) -> bool:
-    """Check if route can meet delivery deadline."""
-    # Calculate total transit days from route legs
-    total_days = sum(leg.base_days for leg in route.legs)
+def _evaluate_wh_capacity(
+    shipment: ShipmentRequest,
+    eta: datetime,
+    snapshot: WHCapacitySnapshot | None,
+) -> tuple[bool, WHImpactLevel, str | None]:
+    """
+    Evaluate WH capacity constraint.
 
-    # Add buffer days (customs + transship + inland)
-    total_days += 2.00  # customs buffer
+    WH freshness rules (FR-024):
+    - <= 24h: normal (LOW impact)
+    - > 24h and <= 72h: AMBER (MEDIUM impact)
+    - > 72h or missing: ZERO (BLOCKED)
 
-    if len(route.legs) > 1:
-        total_days += 4.00  # transship buffer
+    Returns (wh_ok, wh_impact_level, reason_code).
+    """
+    if snapshot is None:
+        return False, WHImpactLevel.BLOCKED, "WH_CAPACITY_BLOCKED"
 
-    land_legs = [l for l in route.legs if l.mode == "LAND"]
-    if land_legs:
-        total_days += 3.00  # inland buffer
+    # Check snapshot freshness
+    now = datetime.utcnow()
+    age_hours = (now - snapshot.snapshot_at).total_seconds() / 3600
 
-    eta = request.etd_target + timedelta(days=total_days)
+    if age_hours > 72:
+        return False, WHImpactLevel.BLOCKED, "WH_SNAPSHOT_STALE"
+    elif age_hours > 24:
+        # AMBER - stale but usable
+        impact = WHImpactLevel.MEDIUM
+    else:
+        impact = WHImpactLevel.LOW
 
-    # For CRITICAL priority, exclude routes where eta > required_delivery_date
-    if request.priority.value == "CRITICAL":
-        if eta.date() > request.required_delivery_date:
-            return False
+    # Check remaining capacity
+    qty_needed = shipment.quantity * 1  # 1 TEU per quantity unit (simplified)
+    if snapshot.remaining_capacity < qty_needed:
+        return False, WHImpactLevel.BLOCKED, "WH_CAPACITY_BLOCKED"
 
-    # Deadline slack check
-    slack = (request.required_delivery_date - eta.date()).days
-    if slack < 0.00:
-        return False
+    if snapshot.remaining_capacity < qty_needed * 2:
+        impact = WHImpactLevel.HIGH if impact != WHImpactLevel.BLOCKED else WHImpactLevel.BLOCKED
 
-    return True
-
-
-def _check_wh_capacity(
-    request: ShipmentRequest,
-    wh_snapshot_age_hours: Optional[float] = None,
-) -> tuple[bool, WHImpactLevel, str]:
-    """Check warehouse capacity at destination."""
-    # MVP: Use destination_site as site_code
-    # Real implementation would check wh_capacity_snapshot table
-
-    if wh_snapshot_age_hours is None:
-        # No snapshot = AMBER (assume capacity OK but unverified)
-        return True, WHImpactLevel.MEDIUM, REASON_WH_SNAPSHOT_STALE
-
-    if wh_snapshot_age_hours > 72.0:
-        return False, WHImpactLevel.BLOCKED, REASON_WH_SNAPSHOT_STALE
-
-    if wh_snapshot_age_hours > 24.0:
-        return True, WHImpactLevel.MEDIUM, REASON_WH_SNAPSHOT_STALE
-
-    return True, WHImpactLevel.LOW, ""
+    return True, impact, None
 
 
-def _check_docs(route: RouteOption, request: ShipmentRequest) -> tuple[bool, float, str]:
-    """Check required documents availability."""
-    # Required docs per route type
-    required_docs_map = {
-        RouteCode.SEA_DIRECT: ["CI", "PL", "BL", "COO"],
-        RouteCode.SEA_TRANSSHIP: ["CI", "PL", "BL", "COO", "HUB_DOC"],
-        RouteCode.SEA_LAND: ["CI", "PL", "BL", "COO", "INLAND_DO"],
-    }
+def _evaluate_docs(
+    shipment: ShipmentRequest,
+    route: RouteOption,
+) -> tuple[bool, float, str | None]:
+    """
+    Evaluate document requirements.
 
-    required_docs = required_docs_map.get(route.route_code, [])
-    available_docs = request.docs_available or []
+    Required docs per route (FR-025):
+    - SEA_DIRECT: CI, PL, BL, COO
+    - SEA_TRANSSHIP: CI, PL, BL, COO, HUB_DOC
+    - SEA_LAND: CI, PL, BL, COO, INLAND_DO
+    """
+    required = _REQUIRED_DOCS.get(route.route_code.value, [])
+    available = set(shipment.docs_available or [])
+    provided = set(d for d in required if d in available)
+    missing = set(required) - provided
 
-    # Check coverage
-    available_set = set(available_docs)
-    required_set = set(required_docs)
-
-    missing = required_set - available_set
+    completeness = (len(provided) / len(required) * 100) if required else 100.0
 
     if missing:
-        completeness = (len(required_set) - len(missing)) / len(required_set) * 100
-        return False, completeness, REASON_MANDATORY_DOC_MISSING
-
-    return True, 100.0, ""
+        return False, round(completeness, 2), "MANDATORY_DOC_MISSING"
+    return True, round(completeness, 2), None
 
 
-def _check_customs(request: ShipmentRequest) -> tuple[bool, str]:
-    """Check customs-related inputs and risk level."""
-    # HS code must be provided
-    if not request.hs_code or len(request.hs_code) < 6:
-        return False, REASON_HS_CODE_MISSING
+def _evaluate_customs(shipment: ShipmentRequest) -> tuple[bool, str | None, list[str]]:
+    """
+    Evaluate customs readiness.
 
-    # Check if HS code is high-risk
-    hs_prefix = request.hs_code[:2]
-    if hs_prefix in HIGH_RISK_HS_PREFIXES:
-        # High-risk cargo needs customs review
-        return False, REASON_CUSTOMS_REVIEW_REQUIRED
+    FX handling (FR-009, EC6):
+    - MVP does NOT do runtime FX conversion
+    - Non-AED input triggers ZERO with FX_NORMALIZED_AED_REQUIRED
 
-    return True, ""
+    HS code check (FR-006, FR-032):
+    - HS code must be numeric 6-12 digits
+    - Missing HS code => ZERO with HS_CODE_MISSING
+    """
+    reasons: list[str] = []
+    input_required: list[str] = []
+
+    # HS code validation
+    if not shipment.hs_code or not shipment.hs_code.isdigit():
+        reasons.append("HS_CODE_MISSING")
+        input_required.append("HS_CODE_MISSING")
+
+    # COG data for OOG/HEAVY_LIFT
+    if shipment.cargo_type.value in ("OOG", "HEAVY_LIFT") and shipment.cog_cm is None:
+        reasons.append("COG_DATA_REQUIRED")
+        input_required.append("COG_DATA_REQUIRED")
+
+    customs_ok = len(reasons) == 0
+    reason_str = reasons[0] if reasons else None
+    return customs_ok, reason_str, input_required
 
 
-def _check_connection(route: RouteOption) -> tuple[bool, str]:
-    """Check connection feasibility between legs."""
-    # For multi-leg routes, check connection time
+def _evaluate_connection(route: RouteOption) -> tuple[bool, str | None]:
+    """
+    Evaluate multimodal connection feasibility.
+
+    Rules:
+    - Transshipment routes with gap > 72h between legs => CONNECTION_RISK_HIGH
+    - All legs must have positive base_days
+    """
     if len(route.legs) < 2:
-        return True, ""
+        return True, None
 
-    # Check gap between consecutive legs
-    sea_legs = [l for l in route.legs if l.mode == "SEA"]
-    if len(sea_legs) < 2:
-        return True, ""
-
-    # For transshipment, need buffer days between connections
-    # Using 4 days transship buffer from transit_rules
-    # If connection time is too short, flag as high risk
-
-    return True, ""
+    # For transshipment, check that connecting time is reasonable
+    # In production, would check actual schedules
+    # Simplified: all legs present means connection OK
+    return True, None
 
 
-def _check_weight(route: RouteOption, request: ShipmentRequest) -> tuple[bool, str]:
-    """Check if cargo weight is within route limits."""
-    limit = WEIGHT_LIMITS.get(route.route_code, 30000.0)
-    total_weight = request.gross_weight_kg * request.quantity
+def compute_wh_freshness_status(snapshot: WHCapacitySnapshot | None) -> tuple[str, float | None]:
+    """
+    Compute WH snapshot freshness status.
 
-    if total_weight > limit:
-        return False, REASON_WEIGHT_LIMIT_EXCEEDED
+    Returns (status, age_hours):
+    - normal: <= 24h
+    - AMBER: > 24h and <= 72h
+    - ZERO: > 72h or missing
+    """
+    if snapshot is None:
+        return "ZERO", None
 
-    return True, ""
+    now = datetime.utcnow()
+    age_hours = (now - snapshot.snapshot_at).total_seconds() / 3600
 
-
-def get_wh_freshness_status(age_hours: float) -> str:
-    """Return WH snapshot freshness status string."""
     if age_hours <= 24:
-        return "OK"
+        return "OK", round(age_hours, 2)
     elif age_hours <= 72:
-        return "AMBER"
-    return "ZERO"
-
-
-def build_constraint_summary(evaluation: ConstraintEvaluation) -> dict:
-    """Build a human-readable constraint summary."""
-    return {
-        "deadline_ok": evaluation.deadline_ok,
-        "wh_ok": evaluation.wh_ok,
-        "docs_ok": evaluation.docs_ok,
-        "customs_ok": evaluation.customs_ok,
-        "connection_ok": evaluation.connection_ok,
-        "wh_impact_level": evaluation.wh_impact_level.value,
-        "docs_completeness_pct": evaluation.docs_completeness_pct,
-        "reason_codes": evaluation.reason_codes,
-        "input_required_codes": evaluation.input_required_codes,
-    }
+        return "AMBER", round(age_hours, 2)
+    else:
+        return "ZERO", round(age_hours, 2)

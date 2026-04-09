@@ -1,296 +1,262 @@
-"""Route Generator: SEA_DIRECT, SEA_TRANSSHIP, SEA_LAND generation."""
-
+"""Route Generator: SEA_DIRECT, SEA_TRANSSHIP, SEA_LAND route candidates."""
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from datetime import datetime, timedelta
+from decimal import Decimal
 
 from .types import (
-    RouteCode,
-    RouteOption,
-    RouteLeg,
-    ShipmentRequest,
     CargoType,
+    RouteCode,
+    RouteLeg,
+    RouteOption,
+    ShipmentRequest,
+    TransportMode,
+    RiskLevel,
 )
 
 
-# Hub nodes for transshipment routes
-HUB_NODES = ["DXB", "JEBEL ALI", "PORT RASHID"]
+# Hub nodes for transshipment routes (simplified MVP data)
+_HUB_NODES: dict[str, str] = {
+    "DXB": "Jebel Ali",
+    "DUB": "Jebel Ali",
+    "AUH": "Khalifa",
+    "KWI": "Shuwaikh",
+}
 
-# Inland destinations for SEA_LAND
-INLAND_DESTINATIONS = {
-    "AE": ["DUBAI", "ABU DHABI", "SHARJAH", "AJMAN"],
-    "SA": ["RIYADH", "JEDDAH", "DAMMAM"],
-    "QA": ["DOHA"],
-    "KW": ["KUWAIT CITY"],
-    "BH": ["MANAMA"],
+# Inland delivery nodes per region (simplified MVP data)
+_INLAND_NODES: dict[str, list[str]] = {
+    "AE": ["Abu Dhabi", "Al Ain", "Sharjah"],
+    "SA": ["Riyadh", "Jeddah", "Dammam"],
+    "QA": ["Doha", "Al Rayyan"],
+    "BH": ["Manama"],
+    "OM": ["Muscat", "Salalah"],
 }
 
 
-def generate_routes(request: ShipmentRequest) -> list[RouteOption]:
-    """
-    Generate feasible route candidates for the given shipment request.
-
-    Generates SEA_DIRECT, SEA_TRANSSHIP, and SEA_LAND routes based on
-    POL/POD pair and cargo restrictions.
-    """
-    routes: list[RouteOption] = []
-
-    # SEA_DIRECT: Direct sea route from pol to pod
-    if _is_lane_supported(request.pol_code, request.pod_code, RouteCode.SEA_DIRECT):
-        direct_route = _create_sea_direct(request)
-        if direct_route:
-            routes.append(direct_route)
-
-    # SEA_TRANSSHIP: Route via hub
-    if _is_lane_supported(request.pol_code, request.pod_code, RouteCode.SEA_TRANSSHIP):
-        transship_route = _create_sea_transship(request)
-        if transship_route:
-            routes.append(transship_route)
-
-    # SEA_LAND: Sea to port + inland transport
-    if _is_lane_supported(request.pol_code, request.pod_code, RouteCode.SEA_LAND):
-        land_route = _create_sea_land(request)
-        if land_route:
-            routes.append(land_route)
-
-    return routes
+def _is_oog_restricted(cargo_type: CargoType, route_code: RouteCode) -> bool:
+    """Check if OOG/HEAVY_LIFT cargo is restricted for given route."""
+    if route_code == RouteCode.SEA_DIRECT:
+        return cargo_type in (CargoType.OOG, CargoType.HEAVY_LIFT)
+    return False
 
 
-def _is_lane_supported(pol_code: str, pod_code: str, route_code: RouteCode) -> bool:
-    """
-    Check if the lane supports the given route type.
-
-    In a real implementation, this would check route_rules.yaml.
-    For MVP, we assume all major ports support all route types.
-    """
-    # MVP: Assume most lanes support all route types
-    # Non-supported lanes would be defined in route_rules
-    return True
+def _is_weight_exceeded(gross_weight_kg: float, route_code: RouteCode) -> bool:
+    """Check if weight exceeds route limit."""
+    # Simplified: SEA_DIRECT max 30t per container, others 25t
+    limit_kg = 30_000 if route_code == RouteCode.SEA_DIRECT else 25_000
+    return gross_weight_kg > limit_kg
 
 
-def _create_sea_direct(request: ShipmentRequest) -> Optional[RouteOption]:
-    """Create a SEA_DIRECT route option."""
-    # Check cargo restrictions
-    if not _check_cargo_restrictions(request, RouteCode.SEA_DIRECT):
-        return None
-
+def _build_sea_direct(req: ShipmentRequest, base_days: Decimal) -> RouteOption:
+    """Build a SEA_DIRECT route: single sea leg POL -> POD."""
     leg = RouteLeg(
         seq=1,
-        mode="SEA",
-        origin_node=request.pol_code,
-        destination_node=request.pod_code,
-        carrier_code=_get_carrier_for_lane(request.pol_code, request.pod_code),
-        service_code=f"SD_{request.pol_code}_{request.pod_code}",
-        base_days=_get_base_transit_days(request.pol_code, request.pod_code),
-        restrictions=_get_restrictions(request),
+        mode=TransportMode.SEA,
+        origin_node=req.pol_code,
+        destination_node=req.pod_code,
+        carrier_code="MAERSK",
+        service_code="SEALAND_DIRECT",
+        base_days=base_days,
+        restrictions_jsonb=None,
     )
-
     return RouteOption(
         id=str(uuid.uuid4()),
         route_code=RouteCode.SEA_DIRECT,
-        mode_mix="SEA",
+        mode_mix=[TransportMode.SEA],
+        legs=[leg],
         feasible=True,
         blocked=False,
-        legs=[leg],
-        evidence_ref=[_generate_evidence_ref("ROUTE", RouteCode.SEA_DIRECT.value)],
+        risk_level=RiskLevel.LOW,
+        evidence_ref=[f"route_gen:v2026.04:SEA_DIRECT:{req.pol_code}:{req.pod_code}"],
     )
 
 
-def _create_sea_transship(request: ShipmentRequest) -> Optional[RouteOption]:
-    """Create a SEA_TRANSSHIP route option via hub."""
-    if not _check_cargo_restrictions(request, RouteCode.SEA_TRANSSHIP):
-        return None
-
-    # Select appropriate hub based on pol/pod
-    hub = _select_hub(request.pol_code, request.pod_code)
-
+def _build_sea_transship(
+    req: ShipmentRequest, hub_code: str, base_days: Decimal, transship_buffer: Decimal
+) -> RouteOption:
+    """Build a SEA_TRANSSHIP route: POL -> hub -> POD."""
+    hub_name = _HUB_NODES.get(hub_code, hub_code)
     leg1 = RouteLeg(
         seq=1,
-        mode="SEA",
-        origin_node=request.pol_code,
-        destination_node=hub,
-        carrier_code=_get_carrier_for_lane(request.pol_code, hub),
-        service_code=f"TS1_{request.pol_code}_{hub}",
-        base_days=_get_base_transit_days(request.pol_code, hub),
-        restrictions=None,
+        mode=TransportMode.SEA,
+        origin_node=req.pol_code,
+        destination_node=hub_name,
+        carrier_code="MAERSK",
+        service_code="FEEDER_EAST",
+        base_days=base_days,
+        restrictions_jsonb=None,
     )
-
     leg2 = RouteLeg(
         seq=2,
-        mode="SEA",
-        origin_node=hub,
-        destination_node=request.pod_code,
-        carrier_code=_get_carrier_for_lane(hub, request.pod_code),
-        service_code=f"TS2_{hub}_{request.pod_code}",
-        base_days=_get_base_transit_days(hub, request.pod_code),
-        restrictions=None,
+        mode=TransportMode.SEA,
+        origin_node=hub_name,
+        destination_node=req.pod_code,
+        carrier_code="MSC",
+        service_code="MAIN_LINE",
+        base_days=transship_buffer,
+        restrictions_jsonb=None,
     )
-
     return RouteOption(
         id=str(uuid.uuid4()),
         route_code=RouteCode.SEA_TRANSSHIP,
-        mode_mix="SEA-SEA",
+        mode_mix=[TransportMode.SEA, TransportMode.SEA],
+        legs=[leg1, leg2],
         feasible=True,
         blocked=False,
-        legs=[leg1, leg2],
-        evidence_ref=[_generate_evidence_ref("ROUTE", RouteCode.SEA_TRANSSHIP.value)],
+        risk_level=RiskLevel.MEDIUM,
+        evidence_ref=[f"route_gen:v2026.04:SEA_TRANSSHIP:{req.pol_code}:{hub_code}:{req.pod_code}"],
     )
 
 
-def _create_sea_land(request: ShipmentRequest) -> Optional[RouteOption]:
-    """Create a SEA_LAND route option with inland final leg."""
-    if not _check_cargo_restrictions(request, RouteCode.SEA_LAND):
-        return None
+def _build_sea_land(
+    req: ShipmentRequest,
+    hub_code: str,
+    sea_days: Decimal,
+    inland_days: Decimal,
+) -> RouteOption:
+    """Build a SEA_LAND route: POL -> hub (sea) -> inland destination."""
+    # Determine inland destination based on destination_site region
+    inland_destinations = _INLAND_NODES.get(req.destination_site[:2].upper(), ["Inland"])
+    inland_dest = inland_destinations[0] if inland_destinations else "Inland"
 
-    # Check if we can generate an inland leg
-    inland_dest = _get_inland_destination(request.destination_site, request.pod_code)
-    if not inland_dest:
-        # Cannot create SEA_LAND without valid inland destination
-        return None
-
+    hub_name = _HUB_NODES.get(hub_code, hub_code)
     leg1 = RouteLeg(
         seq=1,
-        mode="SEA",
-        origin_node=request.pol_code,
-        destination_node=request.pod_code,
-        carrier_code=_get_carrier_for_lane(request.pol_code, request.pod_code),
-        service_code=f"SL_{request.pol_code}_{request.pod_code}",
-        base_days=_get_base_transit_days(request.pol_code, request.pod_code),
-        restrictions=None,
+        mode=TransportMode.SEA,
+        origin_node=req.pol_code,
+        destination_node=hub_name,
+        carrier_code="MAERSK",
+        service_code="FEEDER_GULF",
+        base_days=sea_days,
+        restrictions_jsonb=None,
     )
-
     leg2 = RouteLeg(
         seq=2,
-        mode="LAND",
-        origin_node=request.pod_code,
+        mode=TransportMode.LAND,
+        origin_node=hub_name,
         destination_node=inland_dest,
-        carrier_code=_get_inland_carrier(inland_dest),
-        service_code=f"INLAND_{request.pod_code}_{inland_dest}",
-        base_days=_get_inland_transit_days(inland_dest),
-        restrictions=None,
+        carrier_code="LOCAL_TRUCK",
+        service_code="INLAND_DELIVERY",
+        base_days=inland_days,
+        restrictions_jsonb=None,
     )
-
     return RouteOption(
         id=str(uuid.uuid4()),
         route_code=RouteCode.SEA_LAND,
-        mode_mix="SEA-LAND",
+        mode_mix=[TransportMode.SEA, TransportMode.LAND],
+        legs=[leg1, leg2],
         feasible=True,
         blocked=False,
-        legs=[leg1, leg2],
-        evidence_ref=[_generate_evidence_ref("ROUTE", RouteCode.SEA_LAND.value)],
+        risk_level=RiskLevel.MEDIUM,
+        evidence_ref=[f"route_gen:v2026.04:SEA_LAND:{req.pol_code}:{hub_code}:{inland_dest}"],
     )
 
 
-def _check_cargo_restrictions(request: ShipmentRequest, route_code: RouteCode) -> bool:
+def generate_routes(req: ShipmentRequest) -> list[RouteOption]:
     """
-    Check if cargo type is allowed for the route.
+    Generate feasible route candidates for the given shipment request.
 
-    OOG and HEAVY_LIFT may be restricted on certain routes/hubs.
+    Returns SEA_DIRECT, SEA_TRANSSHIP, and SEA_LAND routes that pass
+    cargo type, weight, and hub restriction checks.
+
+    Rules (from Spec.md):
+    - SEA_LAND requires an inland final leg
+    - OOG/HEAVY_LIFT excluded from SEA_DIRECT (hub-restricted)
+    - Weight limit checks per route type
+    - 1-4 legs per route
     """
-    if request.cargo_type == CargoType.OOG:
-        # OOG cargo may be restricted at certain hubs
-        if route_code == RouteCode.SEA_TRANSSHIP:
-            # Check if any hub in the route restricts OOG
-            for hub in HUB_NODES:
-                if _hub_restricts_oog(hub):
-                    return False
-    elif request.cargo_type == CargoType.HEAVY_LIFT:
-        # HEAVY_LIFT may require special equipment
-        # For MVP, we allow it but mark it in restrictions
-        pass
+    routes: list[RouteOption] = []
+    reason_codes: list[str] = []
 
-    return True
+    # Base transit days by lane (simplified MVP lookup)
+    # In production, this would come from rate_table / transit_rules
+    sea_direct_days = Decimal("12.00")
+    sea_to_hub_days = Decimal("5.00")
+    hub_to_pod_days = Decimal("8.00")
+    sea_to_inland_days = Decimal("5.00")
+    inland_days = Decimal("3.00")
+    transship_buffer = Decimal("4.00")
 
+    # Default hub
+    hub = "DXB"
 
-def _hub_restricts_oog(hub: str) -> bool:
-    """Check if hub has OOG restrictions."""
-    # In production, check hub_rules.yaml
-    restricted_hubs = ["PORT RASHID"]  # Example
-    return hub in restricted_hubs
+    # ── SEA_DIRECT ──────────────────────────────────────────────────────────
+    if _is_oog_restricted(req.cargo_type, RouteCode.SEA_DIRECT):
+        reason_codes.append("HUB_RESTRICTED_FOR_OOG")
+        routes.append(
+            RouteOption(
+                id=str(uuid.uuid4()),
+                route_code=RouteCode.SEA_DIRECT,
+                mode_mix=[TransportMode.SEA],
+                legs=[],
+                feasible=False,
+                blocked=True,
+                risk_level=RiskLevel.BLOCKED,
+                reason_codes=["HUB_RESTRICTED_FOR_OOG"],
+                evidence_ref=["route_gen:v2026.04:SEA_DIRECT:oog_restricted"],
+            )
+        )
+    elif _is_weight_exceeded(req.gross_weight_kg, RouteCode.SEA_DIRECT):
+        reason_codes.append("WEIGHT_LIMIT_EXCEEDED")
+        routes.append(
+            RouteOption(
+                id=str(uuid.uuid4()),
+                route_code=RouteCode.SEA_DIRECT,
+                mode_mix=[TransportMode.SEA],
+                legs=[],
+                feasible=False,
+                blocked=True,
+                risk_level=RiskLevel.BLOCKED,
+                reason_codes=["WEIGHT_LIMIT_EXCEEDED"],
+                evidence_ref=["route_gen:v2026.04:SEA_DIRECT:weight_exceeded"],
+            )
+        )
+    else:
+        routes.append(_build_sea_direct(req, sea_direct_days))
 
+    # ── SEA_TRANSSHIP ───────────────────────────────────────────────────────
+    if _is_weight_exceeded(req.gross_weight_kg, RouteCode.SEA_TRANSSHIP):
+        routes.append(
+            RouteOption(
+                id=str(uuid.uuid4()),
+                route_code=RouteCode.SEA_TRANSSHIP,
+                mode_mix=[TransportMode.SEA, TransportMode.SEA],
+                legs=[],
+                feasible=False,
+                blocked=True,
+                risk_level=RiskLevel.BLOCKED,
+                reason_codes=["WEIGHT_LIMIT_EXCEEDED"],
+                evidence_ref=["route_gen:v2026.04:SEA_TRANSSHIP:weight_exceeded"],
+            )
+        )
+    else:
+        routes.append(_build_sea_transship(req, hub, sea_to_hub_days, hub_to_pod_days))
 
-def _get_carrier_for_lane(origin: str, destination: str) -> str:
-    """Get default carrier code for a lane."""
-    # MVP: Return mock carrier codes
-    carriers = ["MAERSK", "MSC", "CMA CGM", "COSCO", "HAPAG"]
-    # Simple hash to pick consistent carrier for lane
-    idx = hash(f"{origin}{destination}") % len(carriers)
-    return carriers[idx]
+    # ── SEA_LAND ────────────────────────────────────────────────────────────
+    # OOG/HEAVY_LIFT not restricted for SEA_LAND (uses inland leg)
+    if _is_weight_exceeded(req.gross_weight_kg, RouteCode.SEA_LAND):
+        routes.append(
+            RouteOption(
+                id=str(uuid.uuid4()),
+                route_code=RouteCode.SEA_LAND,
+                mode_mix=[TransportMode.SEA, TransportMode.LAND],
+                legs=[],
+                feasible=False,
+                blocked=True,
+                risk_level=RiskLevel.BLOCKED,
+                reason_codes=["WEIGHT_LIMIT_EXCEEDED"],
+                evidence_ref=["route_gen:v2026.04:SEA_LAND:weight_exceeded"],
+            )
+        )
+    else:
+        sea_land_route = _build_sea_land(req, hub, sea_to_inland_days, inland_days)
+        # Verify inland leg exists (FR-013)
+        has_inland = any(leg.mode == TransportMode.LAND for leg in sea_land_route.legs)
+        if not has_inland:
+            sea_land_route.feasible = False
+            sea_land_route.blocked = True
+            sea_land_route.reason_codes.append("LANE_UNSUPPORTED")
+        routes.append(sea_land_route)
 
-
-def _get_inland_carrier(destination: str) -> str:
-    """Get inland carrier for destination."""
-    # MVP: Return mock carrier
-    return "ARCO_LOGISTICS"
-
-
-def _select_hub(pol_code: str, pod_code: str) -> str:
-    """Select appropriate hub for transshipment."""
-    # MVP: Use DXB as default hub
-    return "DXB"
-
-
-def _get_base_transit_days(origin: str, destination: str) -> float:
-    """
-    Get base transit days between ports.
-
-    In production, this would look up rate_table.
-    MVP: Return estimated days based on rough distances.
-    """
-    # Simplified distance-based estimation
-    # Real implementation would use rate_table lookup
-    distances = {
-        ("JEA", "MUN"): 14.0,
-        ("JEA", "BOM"): 7.0,
-        ("JEA", "SGN"): 10.0,
-        ("MUN", "JEA"): 16.0,
-        ("BOM", "JEA"): 8.0,
-        ("SGN", "JEA"): 11.0,
-    }
-
-    key = (origin, destination)
-    if key in distances:
-        return distances[key]
-
-    # Default fallback
-    return 12.00
-
-
-def _get_inland_transit_days(destination: str) -> float:
-    """Get inland transit days to destination."""
-    # Default inland transit
-    return 3.00
-
-
-def _get_inland_destination(destination_site: str, pod_code: str) -> Optional[str]:
-    """Get inland destination for SEA_LAND route."""
-    # Check if destination_site maps to an inland location
-    for country_codes, destinations in INLAND_DESTINATIONS.items():
-        if destination_site.upper() in destinations:
-            return destination_site.upper()
-
-    # Fallback: use pod_code as inland destination
-    return pod_code if pod_code else None
-
-
-def _get_restrictions(request: ShipmentRequest) -> Optional[dict]:
-    """Get cargo restrictions for the route."""
-    restrictions = {}
-
-    if request.cargo_type == CargoType.OOG:
-        restrictions["oog_allowed"] = True
-        restrictions["oog_notes"] = "Out-of-gauge cargo requires special handling"
-
-    if request.cargo_type == CargoType.HEAVY_LIFT:
-        restrictions["heavy_lift_allowed"] = True
-        restrictions["heavy_lift_notes"] = "Heavy lift requires special equipment"
-
-    return restrictions if restrictions else None
-
-
-def _generate_evidence_ref(prefix: str, value: str) -> str:
-        """Generate evidence reference."""
-        import datetime
-        ts = datetime.datetime.utcnow().strftime("%Y%m%d%H%M%S")
-        return f"{prefix}-{value}-{ts}"
+    return routes

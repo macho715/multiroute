@@ -1,55 +1,77 @@
+# route_rules.yaml
+# Version: v2026.04
+# Scope: SEA_DIRECT, SEA_TRANSSHIP, SEA_LAND MVP route generation rules
+---
 version: v2026.04
 supported_routes:
   - SEA_DIRECT
   - SEA_TRANSSHIP
   - SEA_LAND
 
-# Route generation constraints
-route_generation:
-  # SEA_DIRECT: direct port-to-port, no transshipment
+# Hub restrictions
+hubs:
+  - code: DXB
+    name: Jebel Ali
+    allowed_cargo_types:
+      - GENERAL
+      - OOG
+      - HEAVY_LIFT
+  - code: DUB
+    name: Jebel Ali
+    allowed_cargo_types:
+      - GENERAL
+      - OOG
+      - HEAVY_LIFT
+  - code: AUH
+    name: Khalifa Port
+    allowed_cargo_types:
+      - GENERAL
+
+# Route-specific rules
+route_config:
   SEA_DIRECT:
-    min_legs: 1
+    allowed_modes:
+      - SEA
     max_legs: 1
-    allowed_modes: [SEA]
+    min_legs: 1
     requires_inland_leg: false
+    max_weight_kg: 30000
+    cargo_restrictions:
+      OOG: blocked
+      HEAVY_LIFT: blocked
 
-  # SEA_TRANSSHIP: port -> hub -> port
   SEA_TRANSSHIP:
+    allowed_modes:
+      - SEA
+    max_legs: 2
     min_legs: 2
-    max_legs: 3
-    allowed_modes: [SEA]
     requires_inland_leg: false
+    max_weight_kg: 25000
+    cargo_restrictions:
+      OOG: allowed
+      HEAVY_LIFT: allowed
 
-  # SEA_LAND: port -> inland destination (requires inland final leg)
   SEA_LAND:
+    allowed_modes:
+      - SEA
+      - LAND
+    max_legs: 2
     min_legs: 2
-    max_legs: 4
-    allowed_modes: [SEA, INLAND]
     requires_inland_leg: true
+    inland_final_leg: true
+    max_weight_kg: 25000
+    cargo_restrictions:
+      OOG: allowed
+      HEAVY_LIFT: allowed
 
-# Hub restrictions by cargo type
-hub_restrictions:
-  GENERAL:
-    allowed: true
-  OOG:
-    restricted_hubs: []
-    restricted_reason_code: HUB_RESTRICTED_FOR_OOG
-  HEAVY_LIFT:
-    restricted_hubs: []
-    restricted_reason_code: HUB_RESTRICTED_FOR_OOG
-
-# Lane support (POL/POD pairs)
-# Empty means all lanes supported; specific restrictions listed below
-lane_restrictions: []
-
-# Weight limits per route type
-weight_limits:
-  SEA_DIRECT:
-    max_gross_weight_kg: 30000
-    exceeded_reason_code: WEIGHT_LIMIT_EXCEEDED
-  SEA_TRANSSHIP:
-    max_gross_weight_kg: 28000
-    exceeded_reason_code: WEIGHT_LIMIT_EXCEEDED
-  SEA_LAND:
-    max_gross_weight_kg: 25000
-    exceeded_reason_code: WEIGHT_LIMIT_EXCEEDED
+# Weight limits per container type
+container_limits:
+  20GP:
+    max_gross_weight_kg: 30480
+    max_volume_m3: 33.2
+  40GP:
+    max_gross_weight_kg: 30480
+    max_volume_m3: 67.7
+  40HC:
+    max_gross_weight_kg: 30480
+    max_volume_m3: 76.4

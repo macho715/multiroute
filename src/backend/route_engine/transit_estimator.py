@@ -1,89 +1,79 @@
 """Transit Estimator: ETA = ETD + transit_days + buffers."""
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from decimal import Decimal
 
-from .types import (
-    RouteOption,
-    TransitEstimate,
-    ShipmentRequest,
-)
+from .types import RouteOption, ShipmentRequest, TransitEstimate
 
 
-# Buffer days from transit_rules.yaml
-CUSTOMS_BUFFER_DAYS = 2.00
-TRANSSHIP_BUFFER_DAYS = 4.00
-INLAND_BUFFER_DAYS = 3.00
+# Transit buffers from transit_rules.yaml (FR-019)
+_BUFFER_CUSTOMs = Decimal("2.00")
+_BUFFER_TRANSSHIP = Decimal("4.00")
+_BUFFER_INLAND = Decimal("3.00")
 
 
-def estimate_transit(
-    route: RouteOption,
-    request: ShipmentRequest,
-) -> TransitEstimate:
+def estimate_transit(route: RouteOption, etd_target: datetime) -> TransitEstimate:
     """
-    Calculate transit days and ETA.
+    Estimate transit time and ETA for a route.
 
-    Formula: transit_days = sum(leg.base_days) + transship_buffer_days
-             + customs_buffer_days + inland_buffer_days
-             eta = etd_target + transit_days
+    Formula (FR-019):
+    transit_days = sum(leg.base_days)
+                 + transship_buffer_days (if transshipment)
+                 + customs_buffer_days
+                 + inland_buffer_days (if inland leg)
+
+    ETA (FR-020) = etd_target + transit_days
+    deadline_slack_days (FR-021) = required_delivery_date - eta_date
     """
-    total_transit_days = 0.00
-    buffers = {}
-
     # Sum base days from all legs
-    for leg in route.legs:
-        total_transit_days += leg.base_days
+    total_base_days = sum(leg.base_days for leg in route.legs)
 
-    # Add transship buffer if route has multiple sea legs
-    sea_legs = [leg for leg in route.legs if leg.mode == "SEA"]
-    if len(sea_legs) > 1:
-        total_transit_days += TRANSSHIP_BUFFER_DAYS
-        buffers["transship_buffer_days"] = TRANSSHIP_BUFFER_DAYS
+    # Add buffers
+    transship_buffer = Decimal("0.00")
+    customs_buffer = _BUFFER_CUSTOMs
+    inland_buffer = Decimal("0.00")
 
-    # Add customs buffer
-    total_transit_days += CUSTOMS_BUFFER_DAYS
-    buffers["customs_buffer_days"] = CUSTOMS_BUFFER_DAYS
+    # SEA_TRANSSHIP gets transship buffer
+    if route.route_code.value == "SEA_TRANSSHIP":
+        transship_buffer = _BUFFER_TRANSSHIP
 
-    # Add inland buffer if route has land leg
-    land_legs = [leg for leg in route.legs if leg.mode == "LAND"]
-    if land_legs:
-        total_transit_days += INLAND_BUFFER_DAYS
-        buffers["inland_buffer_days"] = INLAND_BUFFER_DAYS
+    # SEA_LAND gets inland buffer
+    if route.route_code.value == "SEA_LAND":
+        inland_buffer = _BUFFER_INLAND
 
-    # Calculate ETA
-    etd = request.etd_target
-    eta = etd + timedelta(days=total_transit_days)
+    transit_days = total_base_days + transship_buffer + customs_buffer + inland_buffer
 
-    # Calculate deadline slack
-    required_delivery = request.required_delivery_date
-    deadline_slack_days = (required_delivery - eta).total_seconds() / 86400
+    # Compute ETA
+    # Use Decimal arithmetic for days precision, then convert to datetime
+    days_float = float(transit_days)
+    eta = etd_target + timedelta(days=days_float)
+
+    buffers_jsonb = {
+        "customs_days": float(_BUFFER_CUSTOMs),
+        "transship_days": float(transship_buffer),
+        "inland_days": float(inland_buffer),
+        "base_days": float(total_base_days),
+        "total_transit_days": float(transit_days),
+    }
 
     return TransitEstimate(
-        etd_target=etd,
-        transit_days=round(total_transit_days, 2),
+        etd_target=etd_target,
+        transit_days=transit_days,
         eta=eta,
-        deadline_slack_days=round(deadline_slack_days, 2),
-        buffers=buffers,
+        deadline_slack_days=Decimal("0.00"),  # Computed in optimize phase with delivery date
+        buffers_jsonb=buffers_jsonb,
     )
 
 
-def calculate_deadline_slack(eta: datetime, required_delivery_date: datetime) -> float:
-    """Calculate days between ETA and required delivery date."""
-    slack = (required_delivery_date - eta).total_seconds() / 86400
-    return round(slack, 2)
+def compute_deadline_slack(eta: datetime, required_delivery_date, transit_days: Decimal) -> Decimal:
+    """
+    Compute deadline slack days.
 
-
-def is_deadline_met(eta: datetime, required_delivery_date: datetime) -> bool:
-    """Check if delivery can meet deadline."""
-    return eta <= required_delivery_date
-
-
-def get_transit_summary(transit: TransitEstimate) -> dict:
-    """Get human-readable transit summary."""
-    return {
-        "transit_days": transit.transit_days,
-        "eta_formatted": transit.eta.strftime("%Y-%m-%d"),
-        "deadline_slack_days": transit.deadline_slack_days,
-        "buffers_applied": list(transit.buffers.keys()) if transit.buffers else [],
-    }
+    slack = required_delivery_date - eta_date
+    Positive = early, negative = late
+    """
+    delivery_dt = datetime.combine(required_delivery_date, datetime.min.time())
+    slack_delta = delivery_dt - eta
+    slack_days = Decimal(str(slack_delta.days)) + Decimal(str(slack_delta.seconds)) / Decimal("86400")
+    return round(slack_days, 2)
