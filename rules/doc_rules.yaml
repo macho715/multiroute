@@ -1,0 +1,37 @@
+version: v2026.04
+
+# Required documents per route type
+route_docs:
+  SEA_DIRECT:
+    - CI    # Commercial Invoice
+    - PL    # Packing List
+    - BL    # Bill of Lading
+    - COO   # Certificate of Origin
+
+  SEA_TRANSSHIP:
+    - CI
+    - PL
+    - BL
+    - COO
+    - HUB_DOC  # Hub/transshipment documentation
+
+  SEA_LAND:
+    - CI
+    - PL
+    - BL
+    - COO
+    - INLAND_DO  # Inland Delivery Order
+
+# Optional documents (not blocking)
+optional_docs:
+  - Packing_List_Amendment
+  - Insurance_Certificate
+  - Phytosanitary_Certificate
+  - Fumigation_Certificate
+
+# Customs documents for review
+customs_docs:
+  required_for_high_risk:
+    - customs_declaration
+    - duty_evidence
+  reason_code: CUSTOMS_REVIEW_REQUIRED

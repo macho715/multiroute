@@ -1,0 +1,55 @@
+version: v2026.04
+supported_routes:
+  - SEA_DIRECT
+  - SEA_TRANSSHIP
+  - SEA_LAND
+
+# Route generation constraints
+route_generation:
+  # SEA_DIRECT: direct port-to-port, no transshipment
+  SEA_DIRECT:
+    min_legs: 1
+    max_legs: 1
+    allowed_modes: [SEA]
+    requires_inland_leg: false
+
+  # SEA_TRANSSHIP: port -> hub -> port
+  SEA_TRANSSHIP:
+    min_legs: 2
+    max_legs: 3
+    allowed_modes: [SEA]
+    requires_inland_leg: false
+
+  # SEA_LAND: port -> inland destination (requires inland final leg)
+  SEA_LAND:
+    min_legs: 2
+    max_legs: 4
+    allowed_modes: [SEA, INLAND]
+    requires_inland_leg: true
+
+# Hub restrictions by cargo type
+hub_restrictions:
+  GENERAL:
+    allowed: true
+  OOG:
+    restricted_hubs: []
+    restricted_reason_code: HUB_RESTRICTED_FOR_OOG
+  HEAVY_LIFT:
+    restricted_hubs: []
+    restricted_reason_code: HUB_RESTRICTED_FOR_OOG
+
+# Lane support (POL/POD pairs)
+# Empty means all lanes supported; specific restrictions listed below
+lane_restrictions: []
+
+# Weight limits per route type
+weight_limits:
+  SEA_DIRECT:
+    max_gross_weight_kg: 30000
+    exceeded_reason_code: WEIGHT_LIMIT_EXCEEDED
+  SEA_TRANSSHIP:
+    max_gross_weight_kg: 28000
+    exceeded_reason_code: WEIGHT_LIMIT_EXCEEDED
+  SEA_LAND:
+    max_gross_weight_kg: 25000
+    exceeded_reason_code: WEIGHT_LIMIT_EXCEEDED

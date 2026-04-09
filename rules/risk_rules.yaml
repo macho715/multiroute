@@ -1,0 +1,48 @@
+version: v2026.04
+
+# Risk levels per route/cargo
+risk_levels:
+  SEA_DIRECT:
+    GENERAL: LOW
+    OOG: MEDIUM
+    HEAVY_LIFT: HIGH
+
+  SEA_TRANSSHIP:
+    GENERAL: MEDIUM
+    OOG: HIGH
+    HEAVY_LIFT: BLOCKED
+
+  SEA_LAND:
+    GENERAL: MEDIUM
+    OOG: HIGH
+    HEAVY_LIFT: BLOCKED
+
+# Risk factors
+risk_factors:
+  # Connection risk based on transit time
+  connection:
+    formula: "transit_buffer_days < 1.00"
+    level: HIGH
+    reason_code: CONNECTION_RISK_HIGH
+
+  # DEM/DET exposure
+  dem_det:
+    exposure_threshold_days: 5
+    reason_code: DEM_DET_EXPOSURE_ESTIMATED
+
+  # Customs risk by HS code pattern
+  customs:
+    high_risk_hs_prefixes:
+      - "84"  # Nuclear reactors, machinery
+      - "85"  # Electrical machinery
+      - "87"  # Vehicles
+    reason_code: CUSTOMS_REVIEW_REQUIRED
+
+# WH impact levels by route
+wh_impact:
+  SEA_DIRECT:
+    impact_level: LOW
+  SEA_TRANSSHIP:
+    impact_level: MEDIUM
+  SEA_LAND:
+    impact_level: HIGH

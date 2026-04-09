@@ -1,0 +1,20 @@
+version: v2026.04
+
+# Transit buffer days
+buffers:
+  customs_days: 2.00
+  transship_days: 4.00
+  inland_days_default: 3.00
+
+# Formula: transit_days = sum(leg.base_days) + transship_buffer_days + customs_buffer_days + inland_buffer_days
+# ETA = etd_target + transit_days
+
+# Connection risk thresholds
+connection_risk:
+  min_connection_days: 0.50
+  low_risk_days: 2.00
+  medium_risk_days: 1.00
+  high_risk_threshold: CONNECTION_RISK_HIGH
+
+# Port congestion factor (future extensibility)
+congestion_factor: 1.00

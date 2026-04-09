@@ -1,0 +1,50 @@
+version: v2026.04
+currency: AED
+rounding: 2
+
+# Priority weights for scoring
+priority_weights:
+  NORMAL:
+    cost: 0.50
+    time: 0.25
+    risk: 0.15
+    wh: 0.10
+  URGENT:
+    cost: 0.25
+    time: 0.50
+    risk: 0.15
+    wh: 0.10
+  CRITICAL:
+    cost: 0.15
+    time: 0.60
+    risk: 0.15
+    wh: 0.10
+
+# Risk penalty mapping
+risk_penalty:
+  LOW: 0.00
+  MEDIUM: 0.10
+  HIGH: 0.25
+  BLOCKED: excluded
+
+# Warehouse impact penalty mapping
+wh_penalty:
+  LOW: 0.00
+  MEDIUM: 0.10
+  HIGH: 0.20
+  BLOCKED: excluded
+
+# Cost component weights for breakdown display
+cost_components:
+  - base_freight_aed
+  - origin_charges_aed
+  - destination_charges_aed
+  - surcharge_aed
+  - dem_det_estimated_aed
+  - inland_aed
+  - handling_aed
+  - special_equipment_aed
+  - buffer_cost_aed
+
+# Buffer cost percentage for risk adjustment
+buffer_cost_pct: 0.05
