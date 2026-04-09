@@ -1,4 +1,5 @@
 // Route Workbench Type Definitions
+// Multi-Route Optimization MVP v1.0.0
 // Following Spec.md v1.0.0 and layout.md
 
 export type RouteStatus = 'OK' | 'REVIEW' | 'AMBER' | 'BLOCKED' | 'ZERO';
@@ -9,6 +10,8 @@ export type DrawerTab = 'overview' | 'legs' | 'cost' | 'transit' | 'docs' | 'wh'
 export type RiskLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'BLOCKED';
 export type WHImpactLevel = 'LOW' | 'MEDIUM' | 'HIGH' | 'BLOCKED';
 export type RouteCode = 'SEA_DIRECT' | 'SEA_TRANSSHIP' | 'SEA_LAND';
+export type Priority = 'NORMAL' | 'URGENT' | 'CRITICAL';
+export type CargoType = 'GENERAL' | 'OOG' | 'HEAVY_LIFT';
 
 // === Shipment Request ===
 export interface DimsCm {
@@ -27,7 +30,7 @@ export interface ShipmentRequest {
   request_id: string;
   pol_code: string;
   pod_code: string;
-  cargo_type: 'GENERAL' | 'OOG' | 'HEAVY_LIFT';
+  cargo_type: CargoType;
   container_type: string;
   quantity: number;
   dims_cm: DimsCm;
@@ -36,7 +39,7 @@ export interface ShipmentRequest {
   etd_target: string;
   required_delivery_date: string;
   incoterm: string;
-  priority: 'NORMAL' | 'URGENT' | 'CRITICAL';
+  priority: Priority;
   hs_code: string;
   destination_site: string;
   docs_available?: string[];
@@ -78,7 +81,7 @@ export interface PenaltyApplied {
 }
 
 export interface DecisionLogicView {
-  priority: 'NORMAL' | 'URGENT' | 'CRITICAL';
+  priority: Priority;
   weights: PriorityWeights;
   normalization_method: 'min_max';
   tie_breaker: string[];
@@ -346,4 +349,53 @@ export const STATUS_DISPLAY_CONFIG: Record<RouteStatus, StatusDisplayConfig> = {
     icon: 'alert-octagon',
     bgColor: 'bg-gray-100',
   },
+};
+
+// === Canonical Reason Codes ===
+export const CANONICAL_REASON_CODES = [
+  'LANE_UNSUPPORTED',
+  'MANDATORY_DOC_MISSING',
+  'WH_CAPACITY_BLOCKED',
+  'DEADLINE_MISS',
+  'HS_CODE_MISSING',
+  'CUSTOMS_INPUT_MISSING',
+  'FX_NORMALIZED_AED_REQUIRED',
+  'WH_SNAPSHOT_STALE',
+  'HUB_RESTRICTED_FOR_OOG',
+  'WEIGHT_LIMIT_EXCEEDED',
+  'COG_DATA_REQUIRED',
+  'CONNECTION_RISK_HIGH',
+  'DEM_DET_EXPOSURE_ESTIMATED',
+  'CUSTOMS_REVIEW_REQUIRED',
+] as const;
+
+// === Input Required Codes ===
+export const INPUT_REQUIRED_CODES = [
+  'FX_NORMALIZED_AED_REQUIRED',
+  'HS_CODE_MISSING',
+  'CUSTOMS_INPUT_MISSING',
+  'COG_DATA_REQUIRED',
+  'WH_SNAPSHOT_MISSING',
+] as const;
+
+// === Priority Weights (from cost_rules.yaml) ===
+export const PRIORITY_WEIGHTS: Record<Priority, PriorityWeights> = {
+  NORMAL: { cost: 0.50, time: 0.25, risk: 0.15, wh: 0.10 },
+  URGENT: { cost: 0.25, time: 0.50, risk: 0.15, wh: 0.10 },
+  CRITICAL: { cost: 0.15, time: 0.60, risk: 0.15, wh: 0.10 },
+};
+
+// === Risk/WH Penalties ===
+export const RISK_PENALTIES: Record<RiskLevel, number> = {
+  LOW: 0.00,
+  MEDIUM: 0.10,
+  HIGH: 0.25,
+  BLOCKED: 0, // excluded
+};
+
+export const WH_PENALTIES: Record<WHImpactLevel, number> = {
+  LOW: 0.00,
+  MEDIUM: 0.10,
+  HIGH: 0.20,
+  BLOCKED: 0, // excluded
 };
