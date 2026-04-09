@@ -1,0 +1,55 @@
+# risk_rules.yaml
+# Version: v2026.04
+# Scope: Risk classification and penalty mapping
+---
+version: v2026.04
+
+# Risk levels
+risk_levels:
+  LOW:
+    description: Standard route with no known risk factors
+    penalty: 0.00
+  MEDIUM:
+    description: Transshipment, longer transit, moderate complexity
+    penalty: 0.10
+  HIGH:
+    description: Port congestion, customs delays, connection risk
+    penalty: 0.25
+  BLOCKED:
+    description: Route infeasible due to hard constraints
+    penalty: excluded
+
+# Risk factors
+risk_factors:
+  connection_gap_hours:
+    threshold: 72
+    operator: gt
+    level: CONNECTION_RISK_HIGH
+    reason_code: CONNECTION_RISK_HIGH
+
+  dem_det_exposure_days:
+    threshold: 3
+    operator: gt
+    level: DEM_DET_EXPOSURE_ESTIMATED
+    reason_code: DEM_DET_EXPOSURE_ESTIMATED
+
+  customs_review_required:
+    threshold: 0
+    operator: gte
+    level: CUSTOMS_REVIEW_REQUIRED
+    reason_code: CUSTOMS_REVIEW_REQUIRED
+
+# WH impact levels
+wh_impact_levels:
+  LOW:
+    description: WH capacity adequate, no congestion risk
+    penalty: 0.00
+  MEDIUM:
+    description: WH approaching capacity (24-72h stale snapshot)
+    penalty: 0.10
+  HIGH:
+    description: WH near capacity, inbound competition
+    penalty: 0.20
+  BLOCKED:
+    description: WH capacity exceeded or snapshot >72h
+    penalty: excluded

@@ -1,0 +1,20 @@
+# transit_rules.yaml
+# Version: v2026.04
+# Scope: Transit time buffers and ETA calculation
+---
+version: v2026.04
+
+# Buffer days (FR-019)
+buffers:
+  customs_days: 2.00
+  transship_days: 4.00
+  inland_days_default: 3.00
+
+# Formula:
+# transit_days = sum(leg.base_days)
+#              + transship_buffer_days (SEA_TRANSSHIP only)
+#              + customs_buffer_days
+#              + inland_buffer_days (SEA_LAND only)
+#
+# eta = etd_target + transit_days
+# deadline_slack_days = required_delivery_date - eta_date

@@ -1,0 +1,67 @@
+# cost_rules.yaml
+# Version: v2026.04
+# Scope: AED currency, priority weights, cost component rules
+---
+version: v2026.04
+currency: AED
+rounding: 2
+
+# Priority weights for ranking (FR-038)
+priority_weights:
+  NORMAL:
+    cost: 0.50
+    time: 0.25
+    risk: 0.15
+    wh: 0.10
+  URGENT:
+    cost: 0.25
+    time: 0.50
+    risk: 0.15
+    wh: 0.10
+  CRITICAL:
+    cost: 0.15
+    time: 0.60
+    risk: 0.15
+    wh: 0.10
+
+# Cost components
+components:
+  base_freight:
+    description: Ocean freight base rate
+    unit: per container
+  origin_charges:
+    description: Origin terminal and documentation charges
+    unit: per shipment
+  destination_charges:
+    description: Destination terminal handling charges
+    unit: per shipment
+  surcharge:
+    description: BAF + CAF + PSS + WRS
+    unit: per container
+  dem_det:
+    description: Demurrage and detention exposure
+    unit: per container per day
+    estimation_mode: exposure_based
+  inland:
+    description: Inland transportation (SEA_LAND only)
+    unit: per 100kg
+  handling:
+    description: Stuffing, lift-on/off charges
+    unit: per container
+  special_equipment:
+    description: OOG, heavy lift, reefer surcharges
+    unit: per container
+  buffer:
+    description: Contingency buffer (5% of subtotal)
+    unit: percentage
+
+# DEM/DET rules
+dem_det:
+  free_time_days: 5.00
+  daily_rates:
+    20GP: 85.00
+    40GP: 150.00
+    40HC: 160.00
+
+# Buffer percentage
+buffer_percentage: 0.05
