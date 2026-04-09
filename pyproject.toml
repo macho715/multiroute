@@ -1,0 +1,34 @@
+[project]
+name = "cursor-route-optimization-pack"
+version = "0.1.0"
+description = "Cursor/GitHub governance pack for the route optimization engine"
+requires-python = ">=3.13,<3.14"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "PyYAML>=6.0",
+  "pre-commit>=3.8",
+  "ruff>=0.6",
+  "black>=24.10",
+  "isort>=5.13",
+  "bandit>=1.7",
+  "pytest>=8.3",
+]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+addopts = "-q --maxfail=1"

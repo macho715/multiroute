@@ -1,0 +1,31 @@
+runtime:
+  default_model: inherit
+  readonly_default: false
+  background_default: false
+  locale: ko-KR
+  response_style: concise-technical
+  human_gate_required_for:
+    - merge
+    - release
+    - deployment
+    - approval-policy-changes
+    - authz-changes
+  no_assumption_commands: true
+  discover_commands_via: tools/discover_repo_commands.py
+
+subagents:
+  planner:
+    readonly: true
+    trigger: planning and SSOT decomposition
+  implementer:
+    readonly: false
+    trigger: minimal-diff implementation
+  verifier:
+    readonly: true
+    trigger: post-change validation
+  reviewer:
+    readonly: true
+    trigger: quality/security/regression review
+  release-manager:
+    readonly: true
+    trigger: PR/release/change summary generation

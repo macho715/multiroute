@@ -1,0 +1,19 @@
+project:
+  name: route-optimization-engine
+  topic: Multi-Route Optimization + Cost vs Transit Tradeoff Engine
+  owner_role: OPS_ADMIN
+  domain: logistics
+  primary_surface: desktop-workbench
+  currency: AED
+  time_unit: days
+  datetime_format: ISO-8601 UTC
+  ssot_files:
+    - plan.md
+    - docs/route-contract-summary.md
+    - docs/workbench-layout-summary.md
+    - AGENTS.md
+  placeholders:
+    - CODEOWNERS org/team slugs
+    - MCP server identifiers
+    - Cloud agent repository mapping
+  delivery_mode: full-option

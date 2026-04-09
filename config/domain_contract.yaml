@@ -1,0 +1,69 @@
+status_values:
+  - OK
+  - REVIEW
+  - AMBER
+  - BLOCKED
+  - ZERO
+
+priority_values:
+  - NORMAL
+  - URGENT
+  - CRITICAL
+
+route_codes:
+  - SEA_DIRECT
+  - SEA_TRANSSHIP
+  - SEA_LAND
+
+roles:
+  - OPS_ADMIN
+  - LOGISTICS_APPROVER
+  - LOGISTICS_REVIEWER
+  - LOGISTICS_VIEWER
+
+approval_states:
+  - NOT_REQUESTED
+  - PENDING
+  - APPROVED
+  - HELD
+
+priority_weights:
+  NORMAL: { cost: 0.50, time: 0.25, risk: 0.15, wh: 0.10 }
+  URGENT: { cost: 0.25, time: 0.50, risk: 0.15, wh: 0.10 }
+  CRITICAL: { cost: 0.15, time: 0.60, risk: 0.15, wh: 0.10 }
+
+risk_penalty:
+  LOW: 0.00
+  MEDIUM: 0.10
+  HIGH: 0.25
+  BLOCKED: excluded
+
+wh_penalty:
+  LOW: 0.00
+  MEDIUM: 0.10
+  HIGH: 0.20
+  BLOCKED: excluded
+
+reason_codes:
+  - LANE_UNSUPPORTED
+  - MANDATORY_DOC_MISSING
+  - WH_CAPACITY_BLOCKED
+  - DEADLINE_MISS
+  - HS_CODE_MISSING
+  - CUSTOMS_INPUT_MISSING
+  - FX_NORMALIZED_AED_REQUIRED
+  - WH_SNAPSHOT_STALE
+  - HUB_RESTRICTED_FOR_OOG
+  - WEIGHT_LIMIT_EXCEEDED
+  - COG_DATA_REQUIRED
+  - CONNECTION_RISK_HIGH
+  - DEM_DET_EXPOSURE_ESTIMATED
+  - CUSTOMS_REVIEW_REQUIRED
+
+api_surface:
+  - POST /api/route/generate
+  - POST /api/route/evaluate
+  - POST /api/route/optimize
+  - POST /api/route/approve
+  - POST /api/route/hold
+  - GET /api/route/dashboard/[request_id]

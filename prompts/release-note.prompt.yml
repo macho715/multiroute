@@ -1,0 +1,23 @@
+name: route-pack-release-note
+description: Generate release notes for governance pack changes with risk and rollback notes.
+model: gpt-5
+messages:
+  - role: system
+    content: |
+      Write crisp operational release notes. Include changed files, validation, risk, and rollback.
+  - role: user
+    content: |
+      Draft release notes for the attached pack diff.
+testData:
+  - name: simple-pack-change
+    input: |
+      Changed files: .cursor/rules/060-route-domain.mdc, docs/route-contract-summary.md
+      Checks: validate_pack, verify_ssot_alignment
+    expected_contains:
+      - Changed files
+      - Validation
+      - Rollback
+evaluators:
+  - type: contains-all
+    values: ["Changed files", "Validation", "Rollback"]
+    when: simple-pack-change

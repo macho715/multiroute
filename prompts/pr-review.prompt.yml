@@ -1,0 +1,31 @@
+name: route-pack-pr-review
+description: Review a pack diff for contract drift, governance mistakes, and missing validation notes.
+model: gpt-5
+messages:
+  - role: system
+    content: |
+      Review the diff conservatively. Prioritize contract drift, approval boundary violations, and missing validation.
+  - role: user
+    content: |
+      Review this pack change and return: summary, risks, missing checks, and rollback notes.
+testData:
+  - name: approval-execution-mixed
+    input: |
+      Diff adds an Execute button next to Approve in the Decision Rail.
+    expected_contains:
+      - high
+      - approval
+      - execution
+  - name: placeholder-left-in-codeowners
+    input: |
+      CODEOWNERS still contains @your-org placeholders.
+    expected_contains:
+      - medium
+      - placeholder
+evaluators:
+  - type: contains-all
+    values: ["high", "approval", "execution"]
+    when: approval-execution-mixed
+  - type: contains-all
+    values: ["medium", "placeholder"]
+    when: placeholder-left-in-codeowners

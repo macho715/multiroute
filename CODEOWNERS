@@ -1,0 +1,9 @@
+# Replace placeholder org/team slugs before enabling required reviews.
+*                               @hvdc/platform-ai @hvdc/logistics-approvers
+/.cursor/                       @hvdc/platform-ai @hvdc/ai-governance
+/.github/                       @hvdc/platform-ai @hvdc/devex
+/docs/                          @hvdc/platform-ai @hvdc/product-ops
+/prompts/                       @hvdc/platform-ai @hvdc/ai-governance
+/config/                        @hvdc/platform-ai @hvdc/ai-governance
+/AGENTS.md                      @hvdc/platform-ai @hvdc/logistics-approvers
+/plan.md                        @hvdc/platform-ai @hvdc/logistics-approvers

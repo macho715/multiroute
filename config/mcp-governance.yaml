@@ -1,0 +1,40 @@
+policy:
+  default: deny-until-reviewed
+  principles:
+    - least-privilege
+    - read-first
+    - human-gate-for-write
+    - no-secrets-in-repo
+
+tiers:
+  tier_1:
+    description: Official or vendor-managed, reviewed and allowed
+    examples:
+      - browser-readonly
+      - github-readonly
+  tier_2:
+    description: Internal or third-party, reviewed and limited
+    examples:
+      - issue-tracker-readwrite-with-human-gate
+  tier_3:
+    description: Experimental, sandbox only
+    examples:
+      - prototype-analytics-mcp
+  denied:
+    description: Destructive, unclear telemetry, or excessive privilege
+    examples:
+      - payment-write
+      - production-db-admin
+      - unrestricted-shell-proxy
+
+allowed_actions:
+  - read
+  - list
+  - search
+  - preview
+restricted_actions:
+  - write
+  - delete
+  - deploy
+  - publish
+  - merge

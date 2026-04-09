@@ -1,0 +1,42 @@
+name: route-contract-regression
+description: Check whether a generated route optimization summary preserves canonical status, approval, and evidence rules.
+model: gpt-5
+messages:
+  - role: system
+    content: |
+      You are validating contract drift for the Route Optimization Engine.
+      Reject outputs that change canonical statuses, route codes, approval boundaries, or required fields.
+  - role: user
+    content: |
+      Review the candidate summary against the canonical contract and return pass/fail with reasons.
+testData:
+  - name: ok-response-has-evidence
+    input: |
+      status=OK
+      recommended_route_code=SEA_DIRECT
+      evidence_ref=["rule:v2026.04"]
+      execution_eligible=false
+    expected_contains:
+      - pass
+  - name: blocked-cannot-approve
+    input: |
+      status=BLOCKED
+      approve_button=true
+    expected_contains:
+      - fail
+  - name: zero-needs-input-required
+    input: |
+      status=ZERO
+      input_required_codes=[]
+    expected_contains:
+      - fail
+evaluators:
+  - type: contains-all
+    values: ["pass" ]
+    when: ok-response-has-evidence
+  - type: contains-all
+    values: ["fail" ]
+    when: blocked-cannot-approve
+  - type: contains-all
+    values: ["fail" ]
+    when: zero-needs-input-required

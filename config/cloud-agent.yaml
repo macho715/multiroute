@@ -1,0 +1,21 @@
+cloud_agents:
+  enabled_by_default: false
+  principles:
+    - no-auto-merge
+    - no-auto-release
+    - no-secrets-in-prompts
+    - human-gate-before-prod-impact
+  candidate_tasks:
+    - nightly-pack-validation
+    - docs-drift-review
+    - prompt-regression-report
+    - dependency-bump-triage
+  required_outputs:
+    - diff-summary
+    - commands-run
+    - risk-notes
+    - rollback-notes
+  blocked_tasks:
+    - production-deploy
+    - credentials-rotation
+    - approval-bypass
